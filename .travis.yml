@@ -1,3 +1,6 @@
+# Break Travis, hard
+BROKEN true
+
 dist: xenial
 language: rust
 os:
