@@ -1,3 +1,7 @@
+# Break Appveyor for now
+
+APPVEYOR BROKEN
+
 environment:
   matrix:
     - RUST: stable
