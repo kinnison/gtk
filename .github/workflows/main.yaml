@@ -1,0 +1,240 @@
+name: "gtk-rs"
+
+on:
+  pull_request:
+    branches:
+      - "*"
+  push:
+    branches:
+      - "master"
+      - "github-actions" # TODO: Remove me
+
+jobs:
+  checks:
+    name: Non-build tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        action: [code, docs]
+        include:
+          - os: windows-latest
+            action: windocs
+    steps:
+      - name: Acquire source code
+        uses: actions/checkout@v2
+      - name: Acquire Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          profile: minimal
+          components: rustfmt, clippy
+        id: toolchain
+      - name: Install MSYS2
+        uses: numworks/setup-msys2@v1
+        if: matrix.os == 'windows-latest'
+      - name: Cache cargo registry
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: checks-${{ runner.os }}-cargo-registry-trimmed-${{ matrix.ver }}
+      - name: Cache cargo git trees
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: checks-${{ runner.os }}-cargo-gits-trimmed-${{ matrix.ver }}
+      - name: Cache cargo build
+        uses: actions/cache@v1
+        with:
+          path: target
+          key: checks-${{ runner.os }}-cargo-target-dir-${{ steps.toolchain.outputs.rustc_hash }}
+      - name: Install packages from apt
+        run: sudo apt install libgtk-3-dev libmount-dev
+        if: matrix.os == 'ubuntu-latest'
+      - name: Install packages with brew
+        run: brew update && brew unlink python@2 && brew install libffi gtk+3 cairo atk
+        if: matrix.os == 'macos-latest'
+      - name: Check generated code
+        run: make regen_check
+        if: matrix.action == 'code'
+      - name: Check documentation builds (non-Windows)
+        uses: actions-rs/cargo@v1
+        with:
+          command: doc
+          args: --features "dox,embed-lgpl-docs"
+        if: matrix.action == 'docs'
+      - name: Check documentation builds (Windows)
+        uses: actions-rs/cargo@v1
+        with:
+          command: doc
+          args: --features "dox"
+        if: matrix.action == 'windocs'
+      - name: "Acquire checker"
+        uses: actions/checkout@v2
+        with:
+          repository: gtk-rs/checker
+          ref: master
+          path: checker
+        if: matrix.action == 'code'
+      - name: "Add a cheeky workspace to make checker somewhat cacheable"
+        run: |
+          echo "[workspace]" >> Cargo.toml
+          echo 'members = ["checker"]' >> Cargo.toml
+        if: matrix.action == 'code'
+      - name: "Build checker"
+        run: cd checker && cargo build --release
+        if: matrix.action == 'code'
+      - name: "Run checker"
+        run: target/release/checker . && ./checker/check_init_asserts
+        if: matrix.action == 'code'
+      - name: "Run clippy"
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --features "${{ matrix.features }}" -- -D warnings
+        if: matrix.action == 'code'
+
+  buildandtest:
+    name: Build and test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        ver:
+          - "3.14"
+          - "3.24"
+        channel:
+          - stable
+          - beta
+          - nightly
+          - 1.40.0
+        exclude:
+          - os: macos-latest
+            ver: "3.24"
+        include:
+          - ver: "3.24"
+            features: v3_16
+          - os: windows-latest
+            bits: 32
+            channel: stable-i686-pc-windows-gnu
+            arch: i686
+            ver: "3.14"
+          - os: windows-latest
+            bits: 64
+            channel: stable-x86_64-pc-windows-gnu
+            arch: x86_64
+            ver: "3.14"
+          - os: windows-latest
+            bits: 32
+            channel: stable-i686-pc-windows-gnu
+            arch: i686
+            ver: "3.24"
+          - os: windows-latest
+            bits: 64
+            channel: stable-x86_64-pc-windows-gnu
+            arch: x86_64
+            ver: "3.24"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Acquire source code
+        uses: actions/checkout@v2
+      - name: Acquire Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.channel }}
+          override: true
+          profile: minimal
+          components: ${{ matrix.components }}
+        id: toolchain
+      - name: Install MSYS2
+        uses: numworks/setup-msys2@v1
+        if: matrix.os == 'windows-latest'
+      - name: Set up MSYS2 path
+        run: |
+          echo "::add-path::$RUNNER_TEMP\\msys\\msys64\\usr\\bin"
+          echo "::add-path::$RUNNER_TEMP\\msys\\msys64\\mingw${{ matrix.bits }}\\bin"
+      - name: Cache cargo registry
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: build-${{ runner.os }}-cargo-registry-trimmed-${{ matrix.ver }}
+      - name: Cache cargo git trees
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: build-${{ runner.os }}-cargo-gits-trimmed-${{ matrix.ver }}
+      - name: Cache cargo build
+        uses: actions/cache@v1
+        with:
+          path: target
+          key: build-${{ runner.os }}-cargo-target-dir-${{ steps.toolchain.outputs.rustc_hash }}
+      - name: Install packages from apt
+        run: sudo apt install libgtk-3-dev libmount-dev
+        if: matrix.os == 'ubuntu-latest'
+      - name: Install packages with brew
+        run: brew update && brew unlink python@2 && brew install libffi gtk+3 cairo atk
+        if: matrix.os == 'macos-latest'
+      - name: Install packages with pacman
+        run: pacman --noconfirm -S base-devel mingw-w64-${{ matrix.arch }}-toolchain mingw-w64-${{ matrix.arch }}-gtk3
+        if: matrix.os == 'windows-latest'
+      - name: Test the library (non-windows)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --features "${{ matrix.features }},embed-lgpl-docs"
+        if: matrix.os != 'windows-latest'
+      - name: Test the library (windows)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+        if: matrix.os == 'windows-latest' && matrix.ver == '3.14'
+      - name: Test the library (windows v3.24)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --features v3_24
+        if: matrix.os == 'windows-latest' && matrix.ver == '3.24'
+      - name: Catch sneaked in lgpl docs
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --features "${{ matrix.features }},purge-lgpl-docs" --jobs 1
+        if: matrix.os != 'windows-latest'
+      - name: Check nothing happened
+        run: git diff -R --exit-code
+        if: matrix.os != 'windows-latest'
+      - name: "Amend cargo config"
+        run: mkdir -p .cargo && echo 'paths = ["."]' >> .cargo/config
+        shell: bash
+      - name: "Acquire examples"
+        uses: actions/checkout@v2
+        with:
+          repository: gtk-rs/examples
+          ref: pending
+          path: _examples
+          fetch-depth: 50
+      - name: "Fake cheeky workspace for examples"
+        run: |
+          echo "[workspace]" >> Cargo.toml;
+          echo 'members = ["_examples"]' >> Cargo.toml
+      - name: "Build examples (non-windows)"
+        run: |
+          # Pretend to be macos otherwise we mess up with a bundle
+          cd _examples
+          env GTK=${{ matrix.ver }} TRAVIS_RUST_VERSION=${{ matrix.channel }} TRAVIS_OS_NAME=osx ./build_travis.sh
+        # We can't run this on windows or if our matrix version is 3.24
+        # until `ubuntu-latest` is 20.04. https://github.com/actions/virtual-environments/issues/228
+        if: matrix.os != 'windows-latest' && matrix.ver != '3.24'
+      - name: "Build examples (windows)"
+        run: cd _examples && cargo build
+        shell: bash
+        if: matrix.os == 'windows-latest' && matrix.ver == '3.14'
+      - name: "Build examples (windows v3.24)"
+        run: cd _examples && cargo build --features gtk_3_24
+        shell: bash
+        if: matrix.os == 'windows-latest' && matrix.ver == '3.24'
