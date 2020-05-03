@@ -32,15 +32,17 @@ fn build_foreground() {
 }
 
 fn check_features() {
-    // The pkg-config file defines a `targets` variable listing the
-    // various backends that gdk (yes, gdk) was compiled for.
+    // gdk-sys provides a backends variable to tell us what backends are
+    // available for us to use in GTK.
     // We extract that and create gdk_backend="x11" and the like
     // as configuration variables.
     // For reference, the backend set at time of writing consists of:
     // x11 win32 quartz broadway wayland
-    if let Ok(targets) = pkg_config::get_variable("gtk+-3.0", "targets") {
+    if let Ok(targets) = std::env::var("DEP_GDK_BACKENDS") {
         for target in targets.split_whitespace() {
             println!("cargo:rustc-cfg=gdk_backend=\"{}\"", target);
         }
+    } else {
+        panic!("No GDK targets found, is gdk-sys working?");
     }
 }
